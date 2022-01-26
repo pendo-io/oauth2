@@ -54,6 +54,7 @@ type Server struct {
 	ExtensionFieldsHandler       ExtensionFieldsHandler
 	AccessTokenExpHandler        AccessTokenExpHandler
 	AuthorizeScopeHandler        AuthorizeScopeHandler
+	ResponseTokenHandler         ResponseTokenHandler
 }
 
 func (s *Server) redirectError(w http.ResponseWriter, req *AuthorizeRequest, err error) error {
@@ -81,6 +82,9 @@ func (s *Server) tokenError(w http.ResponseWriter, err error) error {
 }
 
 func (s *Server) token(w http.ResponseWriter, data map[string]interface{}, header http.Header, statusCode ...int) error {
+	if fn := s.ResponseTokenHandler; fn != nil {
+		return fn(w, data, header, statusCode...)
+	}
 	w.Header().Set("Content-Type", "application/json;charset=UTF-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Pragma", "no-cache")
@@ -178,7 +182,7 @@ func (s *Server) ValidationAuthorizeRequest(r *http.Request) (*AuthorizeRequest,
 	if ccm == "" {
 		ccm = oauth2.CodeChallengePlain
 	}
-	if ccm.String() != "" && !s.CheckCodeChallengeMethod(ccm) {
+	if ccm != "" && !s.CheckCodeChallengeMethod(ccm) {
 		return nil, errors.ErrUnsupportedCodeChallengeMethod
 	}
 
@@ -223,15 +227,6 @@ func (s *Server) GetAuthorizeToken(ctx context.Context, req *AuthorizeRequest) (
 
 	// check the client allows the authorized scope
 	if fn := s.ClientScopeHandler; fn != nil {
-		tgr := &oauth2.TokenGenerateRequest{
-			ClientID:       req.ClientID,
-			UserID:         req.UserID,
-			RedirectURI:    req.RedirectURI,
-			Scope:          req.Scope,
-			AccessTokenExp: req.AccessTokenExp,
-			Request:        req.Request,
-		}
-
 		allowed, err := fn(tgr)
 		if err != nil {
 			return nil, err
@@ -240,16 +235,8 @@ func (s *Server) GetAuthorizeToken(ctx context.Context, req *AuthorizeRequest) (
 		}
 	}
 
-	tgr = &oauth2.TokenGenerateRequest{
-		ClientID:            req.ClientID,
-		UserID:              req.UserID,
-		RedirectURI:         req.RedirectURI,
-		Scope:               req.Scope,
-		AccessTokenExp:      req.AccessTokenExp,
-		Request:             req.Request,
-		CodeChallenge:       req.CodeChallenge,
-		CodeChallengeMethod: req.CodeChallengeMethod,
-	}
+	tgr.CodeChallenge = req.CodeChallenge
+	tgr.CodeChallengeMethod = req.CodeChallengeMethod
 
 	return s.Manager.GenerateAuthToken(ctx, req.ResponseType, tgr)
 }
@@ -390,7 +377,8 @@ func (s *Server) CheckGrantType(gt oauth2.GrantType) bool {
 }
 
 // GetAccessToken access token
-func (s *Server) GetAccessToken(ctx context.Context, gt oauth2.GrantType, tgr *oauth2.TokenGenerateRequest) (oauth2.TokenInfo, error) {
+func (s *Server) GetAccessToken(ctx context.Context, gt oauth2.GrantType, tgr *oauth2.TokenGenerateRequest) (oauth2.TokenInfo,
+	error) {
 	if allowed := s.CheckGrantType(gt); !allowed {
 		return nil, errors.ErrUnauthorizedClient
 	}
